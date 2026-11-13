@@ -181,7 +181,53 @@
         <span class="tag">Not Connected</span>
       </div>
     </section>
+<section class="panel mapping-panel" id="mapping">
+  <div class="panel-heading">
+    <div>
+      <h3>Character & Block Mapping</h3>
+      <p>2D world analysis and path simulation</p>
+    </div>
+    <span class="tag">SIMULATOR V1</span>
+  </div>
 
+  <div class="map-toolbar">
+    <label>Editing Mode</label>
+    <select id="mapMode">
+      <option value="dirt">Place Dirt</option>
+      <option value="rock">Place Rock</option>
+      <option value="cave">Place Cave Background</option>
+      <option value="empty">Erase Block</option>
+      <option value="player">Set Character</option>
+      <option value="target">Set Target</option>
+    </select>
+
+    <div class="map-legend">
+      <span>🟫 Dirt</span>
+      <span>⬛ Rock</span>
+      <span>🟪 Cave</span>
+      <span>🟢 Character</span>
+      <span>🔴 Target</span>
+    </div>
+  </div>
+
+  <div class="world-grid" id="worldGrid"></div>
+
+  <div class="map-controls">
+    <button class="start-btn" id="analyzePath">
+      ANALYZE PATH
+    </button>
+    <button class="clear-btn" id="resetMap">
+      RESET MAP
+    </button>
+  </div>
+
+  <div class="map-results">
+    <h4>Path Analysis</h4>
+    <div id="pathResult">
+      Place a character and target to begin.
+    </div>
+  </div>
+</section>
     <footer>
       GROW ASSIST © 2026 · CONTROL CENTER
     </footer>
