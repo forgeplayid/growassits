@@ -1,6 +1,6 @@
 /* ==========================================
-   GROW ASSIST v1.3
-   AGENT STATUS + LIVE CAPTURE + WORLD MAPPING
+   GROW ASSIST v1.5
+   AGENT STATUS + LIVE CAPTURE + VISUAL BLOCK SCAN + WORLD MAPPING
    Dashboard-only monitoring and simulation.
    No automated gameplay input is sent.
 ========================================== */
@@ -29,6 +29,10 @@ let captureRunning = false;
 let currentCaptureURL = null;
 let captureGeneration = 0;
 let statusTimer = null;
+let detectionEnabled = true;
+let detectionCanvas = null;
+let detectionContext = null;
+let lastDetectionSummary = "";
 
 const $ = (id) => document.getElementById(id);
 
@@ -200,11 +204,201 @@ function stopCapture(message = "Capture stopped.") {
 
   const elements = ensureCaptureElements();
   if (elements) {
+    if (detectionContext && detectionCanvas) {
+      detectionContext.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
+    }
     elements.image.removeAttribute("src");
     elements.image.style.display = "none";
     elements.message.style.display = "block";
     elements.message.textContent = message;
     elements.indicator.style.display = "none";
+  }
+}
+
+/* 4B. INITIAL VISUAL BLOCK DETECTION
+   Browser-side image analysis only. This first pass identifies likely
+   Rock pixels and the dark Cave Background opening, plus the soil region.
+   Results are approximate and must be calibrated against more screenshots.
+*/
+
+function ensureDetectionOverlay(preview) {
+  if (!detectionCanvas) {
+    detectionCanvas = document.createElement("canvas");
+    detectionCanvas.id = "detectionOverlay";
+    Object.assign(detectionCanvas.style, {
+      position: "absolute",
+      inset: "0",
+      width: "100%",
+      height: "100%",
+      pointerEvents: "none",
+      zIndex: "4"
+    });
+    preview.appendChild(detectionCanvas);
+    detectionContext = detectionCanvas.getContext("2d");
+  }
+  return detectionCanvas;
+}
+
+function connectedComponents(mask, width, height, minPixels, maxPixels) {
+  const seen = new Uint8Array(mask.length);
+  const components = [];
+  const neighbors = [-1, 1, -width, width, -width-1, -width+1, width-1, width+1];
+
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || seen[start]) continue;
+    const stack = [start];
+    seen[start] = 1;
+    let minX = width, minY = height, maxX = 0, maxY = 0, count = 0;
+
+    while (stack.length) {
+      const index = stack.pop();
+      const x = index % width;
+      const y = Math.floor(index / width);
+      count++;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+
+      for (const delta of neighbors) {
+        const next = index + delta;
+        if (next < 0 || next >= mask.length || seen[next] || !mask[next]) continue;
+        const nx = next % width;
+        const ny = Math.floor(next / width);
+        if (Math.abs(nx - x) > 1 || Math.abs(ny - y) > 1) continue;
+        seen[next] = 1;
+        stack.push(next);
+      }
+    }
+
+    const boxWidth = maxX - minX + 1;
+    const boxHeight = maxY - minY + 1;
+    if (count >= minPixels && count <= maxPixels && boxWidth >= 14 && boxHeight >= 14) {
+      components.push({ x:minX, y:minY, width:boxWidth, height:boxHeight, pixels:count });
+    }
+  }
+  return components;
+}
+
+function analyzeCaptureImage(image, preview) {
+  if (!detectionEnabled || !image.naturalWidth || !image.naturalHeight) return;
+  const width = image.naturalWidth;
+  const height = image.naturalHeight;
+  const work = document.createElement("canvas");
+  work.width = width;
+  work.height = height;
+  const ctx = work.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0, width, height);
+
+  let pixels;
+  try {
+    pixels = ctx.getImageData(0, 0, width, height).data;
+  } catch (error) {
+    addLog("Detection unavailable: browser blocked image pixel access.");
+    return;
+  }
+
+  // Ignore the Windows title bar and the black strip at the bottom.
+  // The calibrated playfield begins around y=30 in the current Agent capture.
+  const playTop = Math.round(height * 0.05);
+  const groundY = Math.round(height * 0.51);
+  const rockMask = new Uint8Array(width * height);
+  const caveMask = new Uint8Array(width * height);
+  let dirtSamples = 0;
+  let totalSoilSamples = 0;
+
+  for (let y = groundY; y < Math.min(height - 65, Math.round(height * 0.82)); y++) {
+    for (let x = 8; x < width - 8; x++) {
+      const i = (y * width + x) * 4;
+      const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+      const max = Math.max(r,g,b), min = Math.min(r,g,b);
+      const saturation = max - min;
+      const idx = y * width + x;
+
+      // Neutral light-gray pixels are candidate Rock material.
+      if (r > 125 && g > 125 && b > 115 && saturation < 48) rockMask[idx] = 1;
+
+      // Very dark warm pixels near the ground opening are candidate cave pixels.
+      if (y < groundY + 105 && r < 75 && g < 66 && b < 48 && r >= g) caveMask[idx] = 1;
+
+      // Brown pixels are counted as a rough Dirt-terrain signal.
+      if ((x & 1) === 0 && (y & 1) === 0) {
+        if (r > 45 && r < 145 && g > 18 && g < 95 && b < 65 && r > g * 1.35) dirtSamples++;
+        totalSoilSamples++;
+      }
+    }
+  }
+
+  const rocks = connectedComponents(rockMask, width, height, 35, 9000)
+    .filter(box => box.width >= 22 && box.width <= 115 && box.height >= 22 && box.height <= 115)
+    .filter(box => box.y < height * 0.82);
+
+  // Restrict cave candidates to the surface-opening band to avoid diagonal Dirt texture.
+  const caveCandidates = connectedComponents(caveMask, width, height, 100, 14000)
+    .filter(box => box.y >= groundY - 8 && box.y < groundY + 115)
+    .filter(box => box.width >= 30 && box.width <= 180 && box.height >= 25 && box.height <= 140);
+
+  const overlay = ensureDetectionOverlay(preview);
+  const viewW = preview.clientWidth;
+  const viewH = preview.clientHeight;
+  overlay.width = Math.max(1, viewW * (window.devicePixelRatio || 1));
+  overlay.height = Math.max(1, viewH * (window.devicePixelRatio || 1));
+  const out = detectionContext;
+  out.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+  out.clearRect(0, 0, viewW, viewH);
+
+  const scale = Math.min(viewW / width, viewH / height);
+  const drawW = width * scale;
+  const drawH = height * scale;
+  const offsetX = (viewW - drawW) / 2;
+  const offsetY = (viewH - drawH) / 2;
+  const mapBox = box => ({
+    x: offsetX + box.x * scale,
+    y: offsetY + box.y * scale,
+    width: box.width * scale,
+    height: box.height * scale
+  });
+
+  // Mark the broad soil zone as a terrain estimate, not individual Dirt tiles.
+  if (dirtSamples > 100) {
+    out.save();
+    out.strokeStyle = "#d97706";
+    out.lineWidth = 2;
+    out.setLineDash([6, 4]);
+    const soil = mapBox({ x: 8, y: groundY + 8, width: width - 16, height: Math.max(20, height * 0.30) });
+    out.strokeRect(soil.x, soil.y, soil.width, soil.height);
+    out.fillStyle = "#d97706";
+    out.font = "bold 12px Arial";
+    out.fillText("DIRT TERRAIN (estimate)", soil.x + 8, soil.y + 17);
+    out.restore();
+  }
+
+  for (const rock of rocks) {
+    const b = mapBox(rock);
+    out.strokeStyle = "#38bdf8";
+    out.lineWidth = 2;
+    out.setLineDash([]);
+    out.strokeRect(b.x, b.y, b.width, b.height);
+    out.fillStyle = "#38bdf8";
+    out.font = "bold 12px Arial";
+    out.fillText("ROCK?", b.x + 2, Math.max(12, b.y - 4));
+  }
+
+  for (const cave of caveCandidates) {
+    const b = mapBox(cave);
+    out.strokeStyle = "#a78bfa";
+    out.lineWidth = 2;
+    out.setLineDash([4, 3]);
+    out.strokeRect(b.x, b.y, b.width, b.height);
+    out.fillStyle = "#a78bfa";
+    out.font = "bold 12px Arial";
+    out.fillText("CAVE?", b.x + 2, Math.max(12, b.y - 4));
+  }
+
+  const summary = `Visual scan: ${rocks.length} possible Rock, ${caveCandidates.length} possible Cave opening, Dirt terrain ${dirtSamples > 100 ? "visible" : "uncertain"}.`;
+  if (summary !== lastDetectionSummary) {
+    addLog(summary);
+    lastDetectionSummary = summary;
   }
 }
 
@@ -252,6 +446,7 @@ async function updateGameCapture() {
       if (oldURL && oldURL !== newURL) {
         URL.revokeObjectURL(oldURL);
       }
+      analyzeCaptureImage(elements.image, elements.preview);
     };
 
     elements.image.onerror = () => {
