@@ -11,7 +11,7 @@ const CONFIG = {
   agentURL: "http://127.0.0.1:8765/status",
   captureURL: "http://127.0.0.1:8765/capture",
   refreshInterval: 3000,
-  captureInterval: 1500,
+  captureInterval: 500,
   requestTimeout: 8000
 };
 
