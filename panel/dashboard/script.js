@@ -1,36 +1,71 @@
-
 /* ==========================================
-   GROW ASSIST v1.2
-   AGENT + LIVE CAPTURE + WORLD MAPPING
+   GROW ASSIST v1.3
+   AGENT STATUS + LIVE CAPTURE + WORLD MAPPING
+   Dashboard-only monitoring and simulation.
+   No automated gameplay input is sent.
 ========================================== */
 
-/* CONFIGURATION */
+/* 1. CONFIGURATION */
 
 const CONFIG = {
   agentURL: "http://127.0.0.1:8765/status",
   captureURL: "http://127.0.0.1:8765/capture",
   refreshInterval: 3000,
-  captureInterval: 1500
+  captureInterval: 1500,
+  requestTimeout: 8000
 };
 
-/* GLOBAL STATE */
+/* 2. GLOBAL STATE */
 
 let agentOnline = false;
 let gameFound = false;
 let monitoring = false;
-let monitorTimer = null;
 let lastGameState = null;
 let lastAgentError = null;
+let lastCaptureError = null;
 
 let captureTimer = null;
 let captureRunning = false;
 let currentCaptureURL = null;
+let captureGeneration = 0;
+let statusTimer = null;
 
 const $ = (id) => document.getElementById(id);
 
-/* ==========================================
-   1. ACTIVITY LOG
-========================================== */
+function setText(id, value) {
+  const element = $(id);
+  if (element) element.textContent = String(value);
+}
+
+function setFirstExistingText(ids, value) {
+  for (const id of ids) {
+    const element = $(id);
+    if (element) {
+      element.textContent = String(value);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    CONFIG.requestTimeout
+  );
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/* 3. ACTIVITY LOG */
 
 function addLog(message) {
   const list = $("activityList");
@@ -57,38 +92,103 @@ function addLog(message) {
 }
 
 $("clearLog")?.addEventListener("click", () => {
-  $("activityList").innerHTML =
-    '<div class="empty">No activity recorded yet.</div>';
-
-  lastGameState = null;
-  lastAgentError = null;
+  const list = $("activityList");
+  if (list) {
+    list.innerHTML =
+      '<div class="empty">No activity recorded yet.</div>';
+  }
 });
 
-/* ==========================================
-   2. LIVE CAPTURE ELEMENTS
-========================================== */
+/* 4. DETECTION PREVIEW ELEMENTS */
 
-const captureImage = $("gameCaptureImage");
-const captureMessage = $("captureMessage");
-const captureIndicator = $("captureIndicator");
+function ensureCaptureElements() {
+  let preview = $("capturePreview");
+
+  if (!preview) {
+    preview = document.querySelector("#detection .preview");
+  }
+
+  if (!preview) {
+    console.warn(
+      "GROW ASSIST: Detection Preview container not found. " +
+      "Add #capturePreview or .preview inside #detection."
+    );
+    return null;
+  }
+
+  preview.style.position = "relative";
+  preview.style.overflow = "hidden";
+
+  let image = $("gameCaptureImage");
+  if (!image) {
+    image = document.createElement("img");
+    image.id = "gameCaptureImage";
+    image.alt = "Growtopia screen capture";
+    preview.appendChild(image);
+  }
+
+  Object.assign(image.style, {
+    display: "none",
+    width: "100%",
+    height: "100%",
+    maxWidth: "100%",
+    objectFit: "contain",
+    background: "#080c11"
+  });
+
+  let message = $("captureMessage");
+  if (!message) {
+    message = document.createElement("div");
+    message.id = "captureMessage";
+    message.textContent = "Waiting for Local Agent...";
+    preview.appendChild(message);
+  }
+
+  let indicator = $("captureIndicator");
+  if (!indicator) {
+    indicator = document.createElement("div");
+    indicator.id = "captureIndicator";
+    indicator.textContent = "● LIVE CAPTURE";
+    preview.appendChild(indicator);
+  }
+
+  Object.assign(message.style, {
+    display: "block",
+    textAlign: "center",
+    padding: "20px",
+    color: "#85919e"
+  });
+
+  Object.assign(indicator.style, {
+    display: "none",
+    position: "absolute",
+    top: "10px",
+    left: "10px",
+    zIndex: "5",
+    padding: "7px 10px",
+    borderRadius: "5px",
+    background: "#183126",
+    color: "#36d399",
+    fontSize: "10px"
+  });
+
+  return { preview, image, message, indicator };
+}
 
 function showCaptureMessage(message) {
-  if (captureImage) {
-    captureImage.style.display = "none";
-  }
+  const elements = ensureCaptureElements();
+  if (!elements) return;
 
-  if (captureMessage) {
-    captureMessage.style.display = "block";
-    captureMessage.textContent = message;
-  }
-
-  if (captureIndicator) {
-    captureIndicator.style.display = "none";
-  }
+  elements.image.style.display = "none";
+  elements.message.style.display = "block";
+  elements.message.textContent = message;
+  elements.indicator.style.display = "none";
 }
 
 function stopCapture(message = "Capture stopped.") {
-  if (captureTimer) {
+  captureGeneration++;
+
+  if (captureTimer !== null) {
     clearInterval(captureTimer);
     captureTimer = null;
   }
@@ -98,118 +198,102 @@ function stopCapture(message = "Capture stopped.") {
     currentCaptureURL = null;
   }
 
-  if (captureImage) {
-    captureImage.removeAttribute("src");
-    captureImage.style.display = "none";
-  }
-
-  if (captureIndicator) {
-    captureIndicator.style.display = "none";
-  }
-
-  if (captureMessage) {
-    captureMessage.style.display = "block";
-    captureMessage.textContent = message;
+  const elements = ensureCaptureElements();
+  if (elements) {
+    elements.image.removeAttribute("src");
+    elements.image.style.display = "none";
+    elements.message.style.display = "block";
+    elements.message.textContent = message;
+    elements.indicator.style.display = "none";
   }
 }
 
-/* ==========================================
-   3. CAPTURE IMAGE FROM LOCAL AGENT
-========================================== */
+/* 5. LIVE SCREEN CAPTURE */
 
 async function updateGameCapture() {
+  if (captureRunning || !agentOnline || !gameFound) return;
 
-  if (!captureImage || captureRunning) return;
-
-  if (!agentOnline) {
-    stopCapture("Waiting for Local Agent...");
-    return;
-  }
-
-  if (!gameFound) {
-    stopCapture("Waiting for Growtopia...");
-    return;
-  }
+  const elements = ensureCaptureElements();
+  if (!elements) return;
 
   captureRunning = true;
+  const thisGeneration = captureGeneration;
 
   try {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       CONFIG.captureURL + "?t=" + Date.now(),
       {
         method: "GET",
-        cache: "no-store"
+        cache: "no-store",
+        mode: "cors"
       }
     );
 
     if (!response.ok) {
-      throw new Error(
-        "Capture endpoint returned HTTP " + response.status
-      );
+      throw new Error("Capture endpoint returned HTTP " + response.status);
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().startsWith("image/")) {
+      throw new Error("Agent response was not an image (" + contentType + ").");
     }
 
     const blob = await response.blob();
-
-    if (!blob.type.startsWith("image/")) {
-      throw new Error("Agent did not return an image.");
+    if (!blob.size) {
+      throw new Error("Agent returned an empty image.");
     }
+
+    if (thisGeneration !== captureGeneration) return;
 
     const newURL = URL.createObjectURL(blob);
     const oldURL = currentCaptureURL;
 
-    captureImage.onload = () => {
-      if (oldURL) {
+    elements.image.onload = () => {
+      if (oldURL && oldURL !== newURL) {
         URL.revokeObjectURL(oldURL);
       }
     };
 
-    captureImage.onerror = () => {
+    elements.image.onerror = () => {
       URL.revokeObjectURL(newURL);
-
       if (currentCaptureURL === newURL) {
         currentCaptureURL = null;
       }
-
-      showCaptureMessage("Unable to display captured image.");
+      showCaptureMessage("The captured image could not be displayed.");
     };
 
     currentCaptureURL = newURL;
-    captureImage.src = newURL;
-    captureImage.style.display = "block";
+    elements.image.src = newURL;
+    elements.image.style.display = "block";
+    elements.message.style.display = "none";
+    elements.indicator.style.display = "block";
 
-    if (captureMessage) {
-      captureMessage.style.display = "none";
+    if (lastCaptureError !== null) {
+      addLog("Live capture restored.");
+      lastCaptureError = null;
     }
-
-    if (captureIndicator) {
-      captureIndicator.style.display = "block";
-    }
-
   } catch (error) {
+    if (thisGeneration !== captureGeneration) return;
 
-    showCaptureMessage(
-      "Capture unavailable: " + error.message
-    );
+    const message = error.name === "AbortError"
+      ? "Capture request timed out."
+      : error.message;
 
-    if (
-      lastCaptureError !== error.message
-    ) {
-      addLog("Screen capture error: " + error.message);
-      lastCaptureError = error.message;
+    showCaptureMessage("Capture unavailable: " + message);
+
+    if (lastCaptureError !== message) {
+      addLog("Screen capture error: " + message);
+      lastCaptureError = message;
     }
-
   } finally {
     captureRunning = false;
   }
 }
 
-let lastCaptureError = null;
-
 function startCapture() {
-  if (captureTimer) return;
+  if (captureTimer !== null) return;
 
   addLog("Live capture started.");
-
   updateGameCapture();
 
   captureTimer = setInterval(
@@ -218,72 +302,91 @@ function startCapture() {
   );
 }
 
-/* ==========================================
-   4. AGENT CONNECTION
-========================================== */
+/* 6. AGENT STATUS AND GAME DETECTION */
+
+function updateStatusCards(data) {
+  const games = Array.isArray(data.games) ? data.games : [];
+  const firstGame = games[0];
+
+  setFirstExistingText(
+    ["monitorStatus", "agentStatus"],
+    agentOnline ? "Online" : "Offline"
+  );
+
+  setFirstExistingText(
+    ["agentDescription", "monitorDescription"],
+    agentOnline ? "Local Agent connected" : "Cannot connect to local Agent"
+  );
+
+  setFirstExistingText(
+    ["selectedItem", "gameStatus"],
+    gameFound ? "Detected" : "Not Found"
+  );
+
+  setFirstExistingText(
+    ["gameDescription", "gameStatusDescription"],
+    gameFound
+      ? (firstGame?.title || firstGame?.process || "Growtopia")
+      : "Waiting for Growtopia"
+  );
+
+  setFirstExistingText(
+    ["detectedCount", "processCount"],
+    games.length
+  );
+
+  setFirstExistingText(
+    ["systemStatus"],
+    agentOnline ? "Ready" : "Disconnected"
+  );
+
+  setFirstExistingText(
+    ["agentConnection"],
+    agentOnline ? "Connected" : "Disconnected"
+  );
+}
 
 async function updateAgentStatus() {
-
   try {
-
-    const response = await fetch(CONFIG.agentURL, {
-      method: "GET",
-      cache: "no-store"
-    });
+    const response = await fetchWithTimeout(
+      CONFIG.agentURL + "?t=" + Date.now(),
+      {
+        method: "GET",
+        cache: "no-store",
+        mode: "cors"
+      }
+    );
 
     if (!response.ok) {
-      throw new Error("HTTP " + response.status);
+      throw new Error("Status endpoint returned HTTP " + response.status);
     }
 
     const data = await response.json();
 
     agentOnline = data.status === "online";
-
-    const games = Array.isArray(data.games)
-      ? data.games
-      : [];
-
     gameFound = data.gameFound === true;
 
-    $("monitorStatus").textContent =
-      agentOnline ? "Online" : "Offline";
+    const games = Array.isArray(data.games) ? data.games : [];
 
-    $("agentDescription").textContent =
-      agentOnline
-        ? "Local Agent connected"
-        : "Agent unavailable";
-
-    $("selectedItem").textContent =
-      gameFound ? "Detected" : "Not Found";
-
-    $("gameDescription").textContent =
-      gameFound
-        ? games.map(g => g.title || g.process).join(", ")
-        : "Waiting for Growtopia";
-
-    $("detectedCount").textContent = games.length;
-
-    $("systemStatus").textContent =
-      agentOnline ? "Ready" : "Disconnected";
-
-    $("agentConnection").textContent =
-      agentOnline ? "Connected" : "Disconnected";
+    updateStatusCards(data);
 
     if (agentOnline && lastAgentError !== "connected") {
       addLog("GrowAssist Agent connected.");
-      lastAgentError = "connected";
     }
 
     if (gameFound !== lastGameState) {
-
-      addLog(
-        gameFound
-          ? "Growtopia detected. PID: " + games[0].pid
-          : "Growtopia not detected."
-      );
-
+      if (gameFound) {
+        addLog(
+          "Growtopia detected." +
+          (games[0]?.pid ? " PID: " + games[0].pid : "")
+        );
+      } else {
+        addLog("Growtopia not detected.");
+      }
       lastGameState = gameFound;
     }
+
+    lastAgentError = null;
 
     if (agentOnline && gameFound) {
       startCapture();
@@ -294,66 +397,60 @@ async function updateAgentStatus() {
           : "Waiting for Growtopia..."
       );
     }
-
-    lastAgentError = null;
-
   } catch (error) {
-
     agentOnline = false;
     gameFound = false;
 
-    $("monitorStatus").textContent = "Offline";
+    setFirstExistingText(["monitorStatus", "agentStatus"], "Offline");
+    setFirstExistingText(
+      ["agentDescription", "monitorDescription"],
+      "Cannot connect to local Agent"
+    );
+    setFirstExistingText(["selectedItem", "gameStatus"], "Unknown");
+    setFirstExistingText(
+      ["gameDescription", "gameStatusDescription"],
+      "Agent connection unavailable"
+    );
+    setFirstExistingText(["detectedCount", "processCount"], "0");
+    setFirstExistingText(["systemStatus"], "Disconnected");
+    setFirstExistingText(["agentConnection"], "Offline");
 
-    $("agentDescription").textContent =
-      "Cannot connect to local Agent";
+    stopCapture("Agent connection unavailable.");
 
-    $("selectedItem").textContent = "Unknown";
+    const message = error.name === "AbortError"
+      ? "Agent status request timed out."
+      : error.message;
 
-    $("gameDescription").textContent =
-      "Agent connection unavailable";
-
-    $("systemStatus").textContent = "Disconnected";
-
-    $("agentConnection").textContent = "Offline";
-
-    $("detectedCount").textContent = "0";
-
-    stopCapture("Agent disconnected.");
-
-    if (lastAgentError !== error.message) {
-      addLog(
-        "Agent connection failed: " + error.message
-      );
-
-      lastAgentError = error.message;
+    if (lastAgentError !== message) {
+      addLog("Agent connection failed: " + message);
+      lastAgentError = message;
     }
 
     lastGameState = null;
   }
 }
 
-/* Initial connection */
+function startStatusPolling() {
+  if (statusTimer !== null) return;
 
-updateAgentStatus();
+  updateAgentStatus();
+  statusTimer = setInterval(
+    updateAgentStatus,
+    CONFIG.refreshInterval
+  );
+}
 
-setInterval(
-  updateAgentStatus,
-  CONFIG.refreshInterval
-);
-
-/* ==========================================
-   5. ITEM MONITOR CONFIGURATION
-========================================== */
+/* 7. ITEM MONITOR CONFIGURATION
+   This section only stores the dashboard configuration.
+   It does not send gameplay input to Growtopia.
+*/
 
 $("itemSelect")?.addEventListener("change", () => {
-
   const selected = $("itemSelect").value;
-
   addLog("Selected monitoring item: " + selected);
 });
 
 $("startBtn")?.addEventListener("click", () => {
-
   if (monitoring) return;
 
   if (!agentOnline) {
@@ -361,53 +458,50 @@ $("startBtn")?.addEventListener("click", () => {
     return;
   }
 
-  if (
-    !Number.isInteger(Number($("targetCount").value)) ||
-    Number($("targetCount").value) < 1
-  ) {
+  const targetInput = $("targetCount");
+  const targetValue = Number(targetInput?.value);
+
+  if (!Number.isInteger(targetValue) || targetValue < 1) {
     addLog("Invalid monitoring target.");
     return;
   }
 
   monitoring = true;
 
-  const selected = $("itemSelect").value;
-  const target = $("targetCount").value;
+  const selected = $("itemSelect")?.value || "Dirt";
+  const startButton = $("startBtn");
 
-  $("startBtn").textContent = "MONITORING";
-  $("startBtn").disabled = true;
+  if (startButton) {
+    startButton.textContent = "MONITORING";
+    startButton.disabled = true;
+  }
 
   addLog(
     "Monitoring configuration started: " +
-    selected + " | Target: " + target
+    selected + " | Target: " + targetValue
   );
-
-  // Configuration monitoring only.
-  // Does not perform gameplay actions.
 });
 
 $("stopBtn")?.addEventListener("click", () => {
-
   if (!monitoring) return;
 
   monitoring = false;
 
-  $("startBtn").textContent = "START MONITOR";
-  $("startBtn").disabled = false;
+  const startButton = $("startBtn");
+  if (startButton) {
+    startButton.textContent = "START MONITOR";
+    startButton.disabled = false;
+  }
 
   addLog("Monitoring configuration stopped.");
 });
 
-/* ==========================================
-   6. WORLD MAPPING SIMULATOR
-========================================== */
+/* 8. WORLD MAPPING SIMULATOR */
 
 const MAP_WIDTH = 12;
 const MAP_HEIGHT = 8;
 
-const world = Array(
-  MAP_WIDTH * MAP_HEIGHT
-).fill("empty");
+const world = Array(MAP_WIDTH * MAP_HEIGHT).fill("empty");
 
 let player = { x: 2, y: 5 };
 let target = { x: 8, y: 3 };
@@ -422,48 +516,34 @@ function cellIndex(x, y) {
 }
 
 function renderWorld() {
-
   if (!grid) return;
 
   grid.innerHTML = "";
 
   for (let y = 0; y < MAP_HEIGHT; y++) {
-
     for (let x = 0; x < MAP_WIDTH; x++) {
-
       const cell = document.createElement("button");
       const type = world[cellIndex(x, y)];
 
       cell.type = "button";
       cell.className = "world-cell " + type;
 
-      const isPlayer =
-        player.x === x && player.y === y;
-
-      const isTarget =
-        target.x === x && target.y === y;
-
+      const isPlayer = player.x === x && player.y === y;
+      const isTarget = target.x === x && target.y === y;
       const isPath = simulatedPath.some(
-        p => p.x === x && p.y === y
+        point => point.x === x && point.y === y
       );
 
       if (isPlayer) {
-
         cell.classList.add("player");
         cell.textContent = "P";
-
       } else if (isTarget) {
-
         cell.classList.add("target");
         cell.textContent = "T";
-
       } else if (isPath) {
-
         cell.classList.add("path");
         cell.textContent = "•";
-
       } else {
-
         cell.textContent =
           type === "dirt" ? "D" :
           type === "rock" ? "R" :
@@ -473,21 +553,14 @@ function renderWorld() {
       cell.title = `X:${x} Y:${y} - ${type}`;
 
       cell.addEventListener("click", () => {
-
         const mode = mapMode?.value;
-
         if (!mode) return;
 
         if (mode === "player") {
-
           player = { x, y };
-
         } else if (mode === "target") {
-
           target = { x, y };
-
         } else {
-
           world[cellIndex(x, y)] = mode;
         }
 
@@ -506,19 +579,13 @@ function renderWorld() {
   }
 }
 
-/* ==========================================
-   7. PATH ANALYSIS
-========================================== */
-
-// Abstract grid simulation only.
-// Does not control Growtopia.
+/* 9. PATH ANALYSIS
+   Abstract grid simulation only.
+   Does not model verified Growtopia physics.
+*/
 
 function findPath(start, end) {
-
-  if (
-    start.x === end.x &&
-    start.y === end.y
-  ) {
+  if (start.x === end.x && start.y === end.y) {
     return [start];
   }
 
@@ -541,36 +608,29 @@ function findPath(start, end) {
   ];
 
   while (queue.length > 0) {
-
     const current = queue.shift();
-    const p = current.pos;
+    const position = current.pos;
 
-    if (p.x === end.x && p.y === end.y) {
+    if (position.x === end.x && position.y === end.y) {
       return current.path;
     }
 
     for (const move of moves) {
-
-      const nx = p.x + move.x;
-      const ny = p.y + move.y;
+      const nx = position.x + move.x;
+      const ny = position.y + move.y;
 
       if (
         nx < 0 || nx >= MAP_WIDTH ||
         ny < 0 || ny >= MAP_HEIGHT
-      ) {
-        continue;
-      }
+      ) continue;
 
       const index = cellIndex(nx, ny);
-
       if (visited.has(index)) continue;
 
       if (
         ["dirt", "rock"].includes(world[index]) &&
         !(nx === end.x && ny === end.y)
-      ) {
-        continue;
-      }
+      ) continue;
 
       visited.add(index);
 
@@ -578,11 +638,7 @@ function findPath(start, end) {
         pos: { x: nx, y: ny },
         path: [
           ...current.path,
-          {
-            x: nx,
-            y: ny,
-            move: move.type
-          }
+          { x: nx, y: ny, move: move.type }
         ]
       });
     }
@@ -591,16 +647,12 @@ function findPath(start, end) {
   return null;
 }
 
-/* ==========================================
-   8. ANALYZE PATH BUTTON
-========================================== */
+/* 10. ANALYZE PATH BUTTON */
 
 $("analyzePath")?.addEventListener("click", () => {
-
   const result = findPath(player, target);
 
   if (!result) {
-
     simulatedPath = [];
 
     if (pathResult) {
@@ -609,16 +661,13 @@ $("analyzePath")?.addEventListener("click", () => {
     }
 
     addLog("Path analysis: No route found.");
-
   } else {
-
     simulatedPath = result;
 
     const distance = result.length - 1;
-
     const moves = result
       .slice(1)
-      .map(p => p.move)
+      .map(point => point.move)
       .join(" → ");
 
     if (pathResult) {
@@ -627,28 +676,21 @@ $("analyzePath")?.addEventListener("click", () => {
         `Start: (${player.x}, ${player.y}). ` +
         `Target: (${target.x}, ${target.y}). ` +
         `Route: ${moves || "Same position"}. ` +
-        `Abstract simulation only.`;
+        "Abstract simulation only.";
     }
 
-    addLog(
-      "Path analysis completed. Steps: " + distance
-    );
+    addLog("Path analysis completed. Steps: " + distance);
   }
 
   renderWorld();
 });
 
-/* ==========================================
-   9. RESET MAP
-========================================== */
+/* 11. RESET MAP */
 
 $("resetMap")?.addEventListener("click", () => {
-
   world.fill("empty");
-
   player = { x: 2, y: 5 };
   target = { x: 8, y: 3 };
-
   simulatedPath = [];
 
   if (pathResult) {
@@ -657,14 +699,19 @@ $("resetMap")?.addEventListener("click", () => {
   }
 
   renderWorld();
-
   addLog("World mapping reset.");
 });
 
-/* ==========================================
-   10. INITIALIZE
-========================================== */
+/* 12. INITIALIZE */
 
+ensureCaptureElements();
 renderWorld();
-
 addLog("GROW ASSIST dashboard initialized.");
+startStatusPolling();
+
+/* Clean up timers and temporary image URL when leaving page. */
+window.addEventListener("beforeunload", () => {
+  if (statusTimer !== null) clearInterval(statusTimer);
+  if (captureTimer !== null) clearInterval(captureTimer);
+  if (currentCaptureURL) URL.revokeObjectURL(currentCaptureURL);
+});
