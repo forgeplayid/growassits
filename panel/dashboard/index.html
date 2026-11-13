@@ -4,13 +4,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GROW ASSIST</title>
+  <meta name="theme-color" content="#090c10">
+  <title>GROW ASSIST | Control Center</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
 
+<body>
 <div class="app">
 
+  <!-- SIDEBAR -->
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-icon">G</div>
@@ -25,6 +27,7 @@
       <a class="nav-item active" href="#overview">◈ Overview</a>
       <a class="nav-item" href="#monitor">◉ Item Monitor</a>
       <a class="nav-item" href="#detection">▣ Detection</a>
+      <a class="nav-item" href="#mapping">▦ World Mapping</a>
       <a class="nav-item" href="#activity">≡ Activity Log</a>
     </nav>
 
@@ -42,71 +45,82 @@
     </div>
   </aside>
 
+  <!-- MAIN CONTENT -->
   <main class="main">
 
+    <!-- HEADER -->
     <header class="topbar">
       <div>
         <h1>Overview</h1>
         <p>Welcome to your Grow Assist control center.</p>
       </div>
+
       <div class="profile">
         <div class="avatar">G</div>
         <span>Administrator</span>
       </div>
     </header>
 
+    <!-- STATISTICS -->
     <section class="stats" id="overview">
 
       <div class="stat-card">
-        <span>MONITOR STATUS</span>
-        <h2 id="monitorStatus">Idle</h2>
-        <small>Monitoring is not running</small>
+        <span>AGENT STATUS</span>
+        <h2 id="monitorStatus">Checking...</h2>
+        <small id="agentDescription">Connecting to local agent</small>
       </div>
 
       <div class="stat-card">
-        <span>SELECTED ITEM</span>
-        <h2 id="selectedItem">Dirt</h2>
-        <small>Current monitoring target</small>
+        <span>GAME STATUS</span>
+        <h2 id="selectedItem">Checking...</h2>
+        <small id="gameDescription">Waiting for game detection</small>
       </div>
 
       <div class="stat-card">
-        <span>DETECTED ITEMS</span>
+        <span>DETECTED PROCESSES</span>
         <h2 id="detectedCount">0</h2>
-        <small>Total detection count</small>
+        <small>Detected game processes</small>
       </div>
 
       <div class="stat-card">
         <span>SYSTEM STATUS</span>
-        <h2 class="green">Ready</h2>
+        <h2 class="green" id="systemStatus">Ready</h2>
         <small>Dashboard initialized</small>
       </div>
 
     </section>
 
+    <!-- MONITOR AND DETECTION -->
     <section class="content-grid">
 
+      <!-- ITEM MONITOR -->
       <div class="panel" id="monitor">
         <div class="panel-heading">
           <div>
             <h3>Item Monitor</h3>
-            <p>Configure your monitoring target</p>
+            <p>Configure visual monitoring targets</p>
           </div>
           <span class="tag">CONFIGURATION</span>
         </div>
 
-        <label>Select Item</label>
+        <label for="itemSelect">Select Item</label>
         <select id="itemSelect">
           <option value="Dirt">Dirt</option>
           <option value="Rock">Rock</option>
           <option value="Grass">Grass</option>
           <option value="Sand">Sand</option>
+          <option value="Cave Background">Cave Background</option>
         </select>
 
-        <label>Detection Target</label>
-        <input type="number" id="targetCount"
-               value="1000" min="1">
+        <label for="targetCount">Detection Target</label>
+        <input
+          type="number"
+          id="targetCount"
+          value="1000"
+          min="1"
+        >
 
-        <label>Monitoring Interval</label>
+        <label for="interval">Monitoring Interval</label>
         <select id="interval">
           <option value="1">1 Second</option>
           <option value="3" selected>3 Seconds</option>
@@ -117,30 +131,35 @@
           <button class="start-btn" id="startBtn">
             START MONITOR
           </button>
+
           <button class="stop-btn" id="stopBtn">
             STOP
           </button>
         </div>
 
         <p class="notice">
-          Preview mode: monitoring controls are not connected
-          to a live game or detection agent.
+          Visual monitoring configuration only.
+          No automatic gameplay input is performed.
         </p>
       </div>
 
+      <!-- DETECTION PREVIEW -->
       <div class="panel" id="detection">
         <div class="panel-heading">
           <div>
             <h3>Detection Preview</h3>
             <p>Visual monitoring workspace</p>
           </div>
-          <span class="tag">LIVE PREVIEW</span>
+          <span class="tag">VISUAL MONITOR</span>
         </div>
 
         <div class="preview">
           <div class="preview-icon">▣</div>
           <h3>No visual source</h3>
-          <p>Connect an authorized visual data source later.</p>
+          <p>
+            Connect an authorized visual data source
+            to display monitoring results.
+          </p>
         </div>
 
         <div class="progress-info">
@@ -155,79 +174,111 @@
 
     </section>
 
+    <!-- WORLD MAPPING -->
+    <section class="panel mapping-panel" id="mapping">
+
+      <div class="panel-heading">
+        <div>
+          <h3>Character & Block Mapping</h3>
+          <p>2D world analysis and path simulation</p>
+        </div>
+
+        <span class="tag">SIMULATOR V1</span>
+      </div>
+
+      <div class="map-toolbar">
+        <label for="mapMode">Editing Mode</label>
+
+        <select id="mapMode">
+          <option value="dirt">Place Dirt</option>
+          <option value="rock">Place Rock</option>
+          <option value="cave">Place Cave Background</option>
+          <option value="empty">Erase Block</option>
+          <option value="player">Set Character</option>
+          <option value="target">Set Target</option>
+        </select>
+
+        <div class="map-legend">
+          <span>🟫 Dirt</span>
+          <span>⬛ Rock</span>
+          <span>🟪 Cave</span>
+          <span>🟢 Character</span>
+          <span>🔴 Target</span>
+        </div>
+      </div>
+
+      <div
+        class="world-grid"
+        id="worldGrid"
+        aria-label="World mapping simulator"
+      ></div>
+
+      <div class="map-controls">
+        <button class="start-btn" id="analyzePath">
+          ANALYZE PATH
+        </button>
+
+        <button class="clear-btn" id="resetMap">
+          RESET MAP
+        </button>
+      </div>
+
+      <div class="map-results">
+        <h4>Path Analysis</h4>
+
+        <div id="pathResult" aria-live="polite">
+          Place a character and target to begin.
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ACTIVITY LOG -->
     <section class="panel activity-panel" id="activity">
+
       <div class="panel-heading">
         <div>
           <h3>Activity Log</h3>
           <p>Recent system activities</p>
         </div>
-        <button class="clear-btn" id="clearLog">Clear Logs</button>
+
+        <button class="clear-btn" id="clearLog">
+          Clear Logs
+        </button>
       </div>
 
       <div id="activityList" class="activity-list">
-        <div class="empty">No activity recorded yet.</div>
+        <div class="empty">
+          No activity recorded yet.
+        </div>
       </div>
+
     </section>
 
+    <!-- SETTINGS -->
     <section class="panel settings-panel" id="settings">
+
       <h3>Settings</h3>
-      <p>System configuration will be available here.</p>
+      <p>System configuration and integrations.</p>
+
+      <div class="setting-row">
+        <span>Local Agent</span>
+        <span class="tag" id="agentConnection">Checking...</span>
+      </div>
+
       <div class="setting-row">
         <span>Google Sheets Integration</span>
         <span class="tag">Not Connected</span>
       </div>
+
       <div class="setting-row">
         <span>Google Apps Script API</span>
         <span class="tag">Not Connected</span>
       </div>
+
     </section>
-<section class="panel mapping-panel" id="mapping">
-  <div class="panel-heading">
-    <div>
-      <h3>Character & Block Mapping</h3>
-      <p>2D world analysis and path simulation</p>
-    </div>
-    <span class="tag">SIMULATOR V1</span>
-  </div>
 
-  <div class="map-toolbar">
-    <label>Editing Mode</label>
-    <select id="mapMode">
-      <option value="dirt">Place Dirt</option>
-      <option value="rock">Place Rock</option>
-      <option value="cave">Place Cave Background</option>
-      <option value="empty">Erase Block</option>
-      <option value="player">Set Character</option>
-      <option value="target">Set Target</option>
-    </select>
-
-    <div class="map-legend">
-      <span>🟫 Dirt</span>
-      <span>⬛ Rock</span>
-      <span>🟪 Cave</span>
-      <span>🟢 Character</span>
-      <span>🔴 Target</span>
-    </div>
-  </div>
-
-  <div class="world-grid" id="worldGrid"></div>
-
-  <div class="map-controls">
-    <button class="start-btn" id="analyzePath">
-      ANALYZE PATH
-    </button>
-    <button class="clear-btn" id="resetMap">
-      RESET MAP
-    </button>
-  </div>
-
-  <div class="map-results">
-    <h4>Path Analysis</h4>
-    <div id="pathResult">
-      Place a character and target to begin.
-    </div>
-  </div>
-</section>
+    <!-- FOOTER -->
     <footer>
       GROW ASSIST © 2026 · CONTROL CENTER
     </footer>
